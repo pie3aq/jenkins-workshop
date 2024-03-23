@@ -1,0 +1,76 @@
+def status(String status, String comment) {
+    if (comment) {
+        echo "${comment}"
+    }
+}
+
+pipeline {
+    agent any
+    options { disableConcurrentBuilds() }
+    environment {
+        GITEA_MANIFESTS_URL = "https://gitea-jenkinsdev.apps.rke2.lab.linuxpolska.pl/gitea/kubernetes_manifests.git"
+        GITEA_CRED_ID = "giteadev-creds"
+    }
+    parameters {
+        string(name: 'KUBE_KUBECONFIG', defaultValue: '')
+        string(name: 'KUBE_CLUSTER', defaultValue: '')
+        string(name: 'KUBE_NAMESPACE', defaultValue: '')
+        string(name: 'FULL_IMAGE', defaultValue: '')
+        string(name: 'APP_NAME', defaultValue: '')
+    }
+    stages {
+        stage('Deploy to Kubernetes') {
+            agent {
+                label "slaves1"
+            }
+            steps {
+                script {
+                    status("running") 
+
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "master"]],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [[
+                          $class: 'RelativeTargetDirectory',
+                          relativeTargetDir: "k8s_manifests" //do jakiego katalogu lokalnego ma trafic sklonowane repo
+                        ]],
+                        submoduleCfg: [],
+                        userRemoteConfigs: [[
+                            credentialsId: "${GITEA_CRED_ID}",
+                            url: "${GITEA_MANIFESTS_URL}"
+                        ]]
+                    ])
+
+
+                    withCredentials([file(credentialsId: KUBE_KUBECONFIG, variable: 'KUBECONFIG')]) {
+                        echo "Proceeding config files on ${KUBE_CLUSTER}..."
+                        sh "kubectl apply --namespace=${KUBE_NAMESPACE} -f k8s_manifests/${APP_NAME}/config/"
+
+                        echo "Substituting value ${FULL_IMAGE} as image..."
+                        sh "sed -i 's|image: .*|image: ${FULL_IMAGE}|' k8s_manifests/${APP_NAME}/deploy/${APP_NAME}.yml"
+
+                        echo "Proceeding deployment file on ${KUBE_CLUSTER}..."
+                        sh "kubectl apply --namespace=${KUBE_NAMESPACE} -f k8s_manifests/${APP_NAME}/deploy/${APP_NAME}.yml"
+                    }
+
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Deploy to Kubernetes - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Deploy to Kubernetes - failed!")
+                    }
+                }
+                always {
+                    cleanWs()
+                }
+            }
+        }
+    }
+}

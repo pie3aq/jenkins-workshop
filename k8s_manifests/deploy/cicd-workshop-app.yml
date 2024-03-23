@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cicd-workshop-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cicd-workshop-app
+  template:
+    metadata:
+      labels:
+        app: cicd-workshop-app
+    spec:
+      containers:
+      - name: cicd-workshop-app
+        image: "" # Puste, zostanie podmienione przez proces Jenkins
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: cm-cicd-workshop-app
+      imagePullSecrets:
+      - name: docker-io
+

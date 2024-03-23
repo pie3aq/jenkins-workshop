@@ -1,0 +1,128 @@
+def status(String status, String comment) { 
+    if (comment) {
+        echo "${comment}"
+    }
+}
+
+
+def buildMvn() { 
+    sh "mvn compile"
+}
+
+def testMvn() { //prosta funkcja testujaca aplikacje
+    sh "mvn test"
+}
+
+pipeline {
+    agent any
+    options { disableConcurrentBuilds() }
+    environment {
+        TEST_ENV = "test"
+    }
+    parameters {
+        string(name: 'GITEA_PR_STATE', defaultValue: '')
+        string(name: 'GITEA_PR_BASE_BRANCH', defaultValue: '')
+        string(name: 'GITEA_PR_MERGED', defaultValue: '')
+        string(name: 'GITEA_PUSH_BRANCH', defaultValue: '')
+        string(name: 'GITEA_PUSH_HAS_MR', defaultValue: '')
+        string(name: 'GITEA_PUSH_AFTER', defaultValue: '')
+        string(name: 'GITEA_PUSH_COMMIT_MSG', defaultValue: '')
+    }
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'GITEA_PR_STATE', value: '$.action'],
+                [key: 'GITEA_PR_BASE_BRANCH', value: '$.pull_request.base.ref'],
+                [key: 'GITEA_PR_MERGED', value: '$.pull_request.merged'],
+                [key: 'GITEA_PUSH_BRANCH', value: '$.ref'],
+                [key: 'GITEA_PUSH_HAS_MR', value: '$.repository.open_pr_counter'],
+                [key: 'GITEA_PUSH_AFTER', value: '$.after'],
+                [key: 'GITEA_PUSH_COMMIT_MSG', value: '$.head_commit.message']
+            ],
+            causeString: 'Triggered by Gitea.',
+            token: "rwo4vhohqnik97jcolrq4zseyqouw6dpziue14hwsfnk6rv8dro9w475vjpu9889"
+        )
+    }
+    stages {
+        stage('Build project') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        expression { return !(GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED != 'true') }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return (GITEA_PUSH_AFTER != '0000000000000000000000000000000000000000' && GITEA_PUSH_AFTER != '') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    buildMvn()
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Build project - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Build project - failed!")
+                    }
+                }
+            }
+        }
+        stage('Integration tests') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true 
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        anyOf {
+                            expression { return !(GITEA_PR_STATE == 'closed' ) }
+                            expression { return (GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED == 'true') }
+                        }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return !(GITEA_PUSH_AFTER == '0000000000000000000000000000000000000000') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    testMvn()
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Integration tests - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Integration tests - failed!")
+                    }
+                }
+                always {
+                    cleanWs()
+                }
+            }
+        }
+    }
+}

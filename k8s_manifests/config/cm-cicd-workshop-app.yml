@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-cicd-workshop-app
+data:
+  env1: foo
+  env2: bar
+

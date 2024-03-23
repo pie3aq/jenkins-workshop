@@ -1,0 +1,297 @@
+def status(String status, String comment) { 
+    if (comment) {
+        echo "${comment}"
+    }
+}
+
+def prepareJava(String version) {
+    if (version == '17') {
+        env.JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-17.0.10.0.7-2.el9.x86_64'
+    } else {
+        env.JAVA_HOME = '/usr/lib/jvm/java-11-openjdk-11.0.22.0.7-2.el9.x86_64'
+    }
+}
+
+def buildMvn(String options = '') { 
+    if (options) {
+        sh "mvn compile ${options}"
+    } else {
+        sh "mvn compile"
+    }
+}
+
+def packageMvn(String options = '') { 
+    if (options) {
+        sh "mvn package ${options}"
+    } else {
+        sh "mvn package"
+    }
+}
+
+def testMvn(String options = '') {
+    if (options) {
+        sh "mvn test ${options}"
+    } else {
+        sh "mvn test"
+    }
+}
+
+def sonarMvn(String options = '') { // Funkcja wysylajaca raport do sonar
+    if (options) {
+        sh "mvn sonar:sonar ${options}"
+    } else {
+        sh "mvn sonar:sonar"
+    }
+}
+
+
+pipeline {
+    agent any
+    options { disableConcurrentBuilds() }
+    environment {
+        JAVA_VERSION = '17'
+        JAVA_HOME = ''
+        DOCKER_REPO_URL = 'docker.io/pie3aq'
+        DOCKER_CRED_ID = 'docker-credentials'
+        APP_VERSION = ''
+        APP_NAME = ''
+    }
+    parameters {
+        string(name: 'GITEA_PR_STATE', defaultValue: '')
+        string(name: 'GITEA_PR_BASE_BRANCH', defaultValue: '')
+        string(name: 'GITEA_PR_MERGED', defaultValue: '')
+        string(name: 'GITEA_PUSH_BRANCH', defaultValue: '')
+        string(name: 'GITEA_PUSH_HAS_MR', defaultValue: '')
+        string(name: 'GITEA_PUSH_AFTER', defaultValue: '')
+        string(name: 'GITEA_PUSH_COMMIT_MSG', defaultValue: '')
+    }
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'GITEA_PR_STATE', value: '$.action'],
+                [key: 'GITEA_PR_BASE_BRANCH', value: '$.pull_request.base.ref'],
+                [key: 'GITEA_PR_MERGED', value: '$.pull_request.merged'],
+                [key: 'GITEA_PUSH_BRANCH', value: '$.ref'],
+                [key: 'GITEA_PUSH_HAS_MR', value: '$.repository.open_pr_counter'],
+                [key: 'GITEA_PUSH_AFTER', value: '$.after'],
+                [key: 'GITEA_PUSH_COMMIT_MSG', value: '$.head_commit.message']
+            ],
+            causeString: 'Triggered by Gitea.',
+            token: "rwo4vhohqnik97jcolrq4zseyqouw6dpziue14hwsfnk6rv8dro9w475vjpu9889"
+        )
+    }
+    stages {
+        stage('Build project') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        expression { return !(GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED != 'true') }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return (GITEA_PUSH_AFTER != '0000000000000000000000000000000000000000' && GITEA_PUSH_AFTER != '') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    prepareJava("${JAVA_VERSION}")
+                    buildMvn()
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Build project - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Build project - failed!")
+                    }
+                }
+            }
+        }
+        stage('Integration tests') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true 
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        anyOf {
+                            expression { return !(GITEA_PR_STATE == 'closed' ) }
+                            expression { return (GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED == 'true') }
+                        }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return !(GITEA_PUSH_AFTER == '0000000000000000000000000000000000000000') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    testMvn()
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Integration tests - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Integration tests - failed!")
+                    }
+                }
+            }
+        }
+        stage('Sonarqube Security Scan') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true 
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        anyOf {
+                            expression { return !(GITEA_PR_STATE == 'closed' ) }
+                            expression { return (GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED == 'true') }
+                        }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return !(GITEA_PUSH_AFTER == '0000000000000000000000000000000000000000') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    withSonarQubeEnv('sonardev') { // Uzywa konfiguracji SonarQube zdefiniowanej w Jenkins
+                        sonarMvn("-Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true")
+                    }
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Sonarqube Security Scan - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Sonarqube Security Scan - failed!")
+                    }
+                }
+            }
+        }
+        stage('QualityGate') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true 
+                anyOf {
+                    allOf {
+                        expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                        anyOf {
+                            expression { return !(GITEA_PR_STATE == 'closed' ) }
+                            expression { return (GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED == 'true') }
+                        }
+                    }
+                    allOf {
+                        expression { return !(GITEA_PUSH_HAS_MR == '0') }
+                        expression { return !(GITEA_PUSH_AFTER == '0000000000000000000000000000000000000000') }
+                        expression { return !(GITEA_PUSH_COMMIT_MSG.contains("Merge")) }
+                    }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    def qg = waitForQualityGate() // Czeka na wynik Quality Gate
+                    if (qg.status != 'OK') {
+                        error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                    }
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "QualityGate - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "QualityGate - failed!")
+                    }
+                }
+            }
+        }
+        stage('Package App & Build Docker Image') {
+            agent {
+                label "slaves1"
+            }
+            when {
+                beforeAgent true 
+                allOf {
+                    expression { return (GITEA_PR_BASE_BRANCH == 'master' ) }
+                    expression { return (GITEA_PR_STATE == 'closed' && GITEA_PR_MERGED == 'true') }
+                }
+            }
+            steps {
+                script {
+                    status("running")
+                    packageMvn()
+
+                    def pom = readMavenPom file: 'pom.xml'
+                    APP_VERSION = pom.version
+                    APP_NAME = pom.name
+
+                    withCredentials([usernamePassword(credentialsId: DOCKER_CRED_ID, usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh "docker login -u ${USERNAME} -p ${PASSWORD}"
+                    }
+
+                    sh """
+                        docker build -t ${DOCKER_REPO_URL}/${APP_NAME}:${APP_VERSION} .
+                        docker push ${DOCKER_REPO_URL}/${APP_NAME}:${APP_VERSION}
+                    """
+
+                    sh "docker rmi ${DOCKER_REPO_URL}/${APP_NAME}:${APP_VERSION}"
+
+                }
+            }
+            post {
+                success {
+                    script {
+                        status("success", "Package App & Build Docker Image - success!")
+                    }
+                }
+                failure {
+                    script {
+                        status("failed", "Package App & Build Docker Image - failed!")
+                    }
+                }
+                always {
+                    cleanWs()
+                }
+            }
+        }
+    }
+}
